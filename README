@@ -1,0 +1,21 @@
+quickstack is a tool to take call stack traces with minimal overheads.
+
+There are a couple of tools to take stack traces such as gdb, pstack, but these tools
+have serious overheads. In many cases, target process stops for 0.2-N seconds.
+So it is dangerous to use such tools in production environment.
+quickstack makes it possible to take stack traces in less than 1 milliseconds. This is
+much smaller overhead so you can frequently take stack traces in production environment.
+
+quickstack internally scans stack frames and guesses caller functions.
+For 64bit applications, it is highly recommended to build with -fno-omit-frame-pointer.
+
+How to build:
+* Install binutils 2.22+
+* Install cmake
+* cmake .
+* make
+* make install
+
+Example:
+[user$] quickstack -p `pidof mysqld`
+

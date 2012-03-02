@@ -1,0 +1,25 @@
+# Executable
+quickstack
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+
+# Compiled Dynamic libraries
+*.so
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+
+# CMake-generated files
+*.cmake
+CMakeCache.txt
+CMakeFiles/*
+Makefile
+
+*.tar.gz
+_CPack_Package/*
+install_manifest.txt
