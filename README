@@ -10,7 +10,7 @@ quickstack internally scans stack frames and guesses caller functions.
 For 64bit applications, it is highly recommended to build with -fno-omit-frame-pointer.
 
 How to build:
-* Install binutils 2.22+
+* Install binutils 2.22+ and elfutils-libelf-devel
 * Install cmake
 * cmake .
 * make
