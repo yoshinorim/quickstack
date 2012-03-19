@@ -18,7 +18,7 @@ include_directories(${BINUTILS_INCLUDE_DIR})
 
 add_executable(quickstack ${SOURCE})
 target_link_libraries(quickstack
-  ${BINUTILS_LIB} ${BINUTILS_ELF_LIB} ${BINUTILS_IBERTY_LIB})
+  z ${BINUTILS_LIB} ${BINUTILS_ELF_LIB} ${BINUTILS_IBERTY_LIB})
 
 install(TARGETS quickstack DESTINATION bin)
 
