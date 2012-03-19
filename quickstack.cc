@@ -358,7 +358,7 @@ static void read_proc_map_ent(char *line, proc_info &pinfo,
   e.addr_size = a1 - a0;
   e.offset = atol(t2 + 1);
   e.path = std::string(t5 + 1);
-  if (e.path == "[vdso]") {
+  if (e.path == "[vdso]" || e.path == "[vsyscall]") {
     e.is_vdso = true;
   } else {
     e.stbl= stmap->get(e.path.c_str());
@@ -452,7 +452,7 @@ static const symbol_ent *pinfo_find_symbol(const proc_info &pinfo,
     DBG(30, "%lx not found", addr);
   } else if (addr >= i->addr_begin + i->addr_size) {
     DBG(30, "%lx out of range [%lx %lx]", addr, i->addr_begin, i->addr_begin + i->addr_size);
-  } else if (!i->stbl->bh) {
+  } else if (!i->stbl || !i->stbl->bh) {
     DBG(30, "%lx no symbol found", addr);
     if (i->is_vdso) {
       offset_r = addr - i->addr_begin;
