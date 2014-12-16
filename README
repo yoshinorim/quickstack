@@ -16,6 +16,12 @@ How to build:
 * make
 * make install
 
+Install dependencies (Ubuntu):
+sudo apt-get install binutils-dev
+sudo apt-get install elfutils-dev
+sudo apt-get install libiberty-dev
+
+
 Example:
 [user$] quickstack -p `pidof mysqld`
 
