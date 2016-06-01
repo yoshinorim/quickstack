@@ -5,7 +5,6 @@
 #include <getopt.h>
 #include <sys/mman.h>
 
-#include <fstream>
 #include <sstream>
 
 #if defined(__i386__)
@@ -52,6 +51,7 @@ int num_basic_libs = 10;
 volatile sig_atomic_t shutdown_program = 0;
 int print_arg = 0;
 int single_line = 0;
+int thread_names = 0;
 int trace_multiple_procs = 0;
 int basename_only = 0;
 int max_ptrace_calls = 1000;
@@ -966,7 +966,7 @@ int get_tgid(int target_pid) {
   return tgid;
 }
 
-void get_pids(int target_pid, std::vector<int>& pids_r) {
+void get_tids(const int target_pid, thread_list& threads) {
   char fn[PATH_MAX];
   bool target_pid_exists = false;
   snprintf(fn, sizeof(fn), "/proc/%d/task", target_pid);
@@ -984,14 +984,14 @@ void get_pids(int target_pid, std::vector<int>& pids_r) {
         if (dent->d_name[0] == '.') {
           continue;
         }
-        int pid = atoi(dent->d_name);
-        if (pid == target_pid) {
+        int tid = atoi(dent->d_name);
+        if (tid == target_pid) {
           target_pid_exists = true;
           continue;
         } else if (tgid != target_pid) {
           continue;
         } else {
-          pids_r.push_back(pid);
+          threads.push_back(thread_info(tid));
         }
       }
     } while (dent);
@@ -1004,8 +1004,8 @@ void get_pids(int target_pid, std::vector<int>& pids_r) {
     fprintf(stderr, "Process id %d does not exist on %s\n", target_pid, fn);
     exit(1);
   }
-  std::sort(pids_r.begin(), pids_r.end());
-  pids_r.push_back(target_pid);
+  std::sort(threads.begin(), threads.end());
+  threads.push_back(thread_info(target_pid));
   return;
 }
 
@@ -1014,14 +1014,14 @@ static double timediff(struct timeval tv0, struct timeval tv1) {
          (double)((double)tv1.tv_usec * 1e-3 - (double)tv0.tv_usec * 1e-3);
 }
 
-void print_trace_report(proc_info* pinfos, const vector<int>& pids) {
-  int slowest_pid = 0;
+void print_trace_report(proc_info* pinfos, const thread_list& threads) {
+  int slowest_tid = 0;
   double slowest_time = -1;
   double sum_time = 0;
 
-  for (uint i = 0; i < pids.size(); i++) {
+  for (uint i = 0; i < threads.size(); i++) {
     if (pinfos[i].stall_time > slowest_time) {
-      slowest_pid = pids[i];
+      slowest_tid = threads[i].tid;
       slowest_time = pinfos[i].stall_time;
     }
     sum_time += pinfos[i].stall_time;
@@ -1030,29 +1030,31 @@ void print_trace_report(proc_info* pinfos, const vector<int>& pids) {
   DBG(1, "Total Traced Time: %6.3f milliseconds", sum_time);
   DBG(1,
       "Average Traced Time Per LWP: %6.3f milliseconds",
-      (double)sum_time / pids.size());
+      (double)sum_time / threads.size());
   DBG(1,
       "Longest Traced LWP: LWP %d, %6.3f milliseconds",
-      slowest_pid,
+      slowest_tid,
       slowest_time);
 }
 
-void attach_and_dump_all(const vector<int>& pids,
+void attach_and_dump_all(const thread_list& threads,
                          proc_info* pinfos,
                          vector<ulong>* vals_sps,
                          user_regs_struct* regs,
                          bool* fails,
                          bool lock_main) {
-  for (size_t i = 0; i < pids.size(); ++i) {
+  for (size_t i = 0; i < threads.size(); ++i) {
 
-    if (lock_main && pids[i] == target_pid) {
-      if (get_user_regs(pids[i], regs[i]) != 0) {
+    if (lock_main && threads[i].tid == target_pid) {
+      if (get_user_regs(threads[i].tid, regs[i]) != 0) {
         fails[i] = true;
       } else {
         if (max_ptrace_calls &&
-            get_stack_trace(
-                pids[i], pinfos[i], max_ptrace_calls, regs[i], vals_sps[i]) !=
-                0) {
+            get_stack_trace(threads[i].tid,
+                            pinfos[i],
+                            max_ptrace_calls,
+                            regs[i],
+                            vals_sps[i]) != 0) {
           fails[i] = true;
         }
       }
@@ -1061,40 +1063,42 @@ void attach_and_dump_all(const vector<int>& pids,
 
     fails[i] = false;
     // do not attach if pid does not exist
-    if (kill(pids[i], 0) != 0) {
-      DBG(11, "kill(0) failed (pid not exist): %d", pids[i]);
+    if (kill(threads[i].tid, 0) != 0) {
+      DBG(11, "kill(0) failed (pid not exist): %d", threads[i].tid);
       fails[i] = true;
       continue;
     }
-    if (is_pid_stopped(pids[i])) {
-      DBG(3, "PID %d stops. Skipping tracing the pid.", pids[i]);
+    if (is_pid_stopped(threads[i].tid)) {
+      DBG(3, "PID %d stops. Skipping tracing the pid.", threads[i].tid);
     }
-    DBG(3, "Attaching process %d.", pids[i]);
+    DBG(3, "Attaching process %d.", threads[i].tid);
     gettimeofday(&pinfos[i].tv_start, 0);
-    int rc = ptrace_attach_proc(pids[i]);
+    int rc = ptrace_attach_proc(threads[i].tid);
     if (rc != 0) {
       fails[i] = true;
     } else {
-      if (get_user_regs(pids[i], regs[i]) != 0) {
+      if (get_user_regs(threads[i].tid, regs[i]) != 0) {
         fails[i] = true;
       } else {
         if (max_ptrace_calls &&
-            get_stack_trace(
-                pids[i], pinfos[i], max_ptrace_calls, regs[i], vals_sps[i]) !=
-                0) {
+            get_stack_trace(threads[i].tid,
+                            pinfos[i],
+                            max_ptrace_calls,
+                            regs[i],
+                            vals_sps[i]) != 0) {
           fails[i] = true;
         }
       }
     }
     if (rc != ESRCH) {
-      ptrace_detach_proc(pids[i]);
+      ptrace_detach_proc(threads[i].tid);
       gettimeofday(&pinfos[i].tv_end, 0);
       pinfos[i].stall_time = timediff(pinfos[i].tv_start, pinfos[i].tv_end);
-      DBG(3, "Detached process %d", pids[i]);
+      DBG(3, "Detached process %d", threads[i].tid);
       DBG(3,
           "Tracing duration at LWP %d was "
           "%7.3f milliseconds\n",
-          pids[i],
+          threads[i].tid,
           pinfos[i].stall_time);
     }
     if (shutdown_program) {
@@ -1104,7 +1108,7 @@ void attach_and_dump_all(const vector<int>& pids,
   }
 }
 
-void attach_and_dump_lock_all(const vector<int>& pids,
+void attach_and_dump_lock_all(const thread_list& threads,
                               proc_info* pinfos,
                               vector<ulong>* vals_sps,
                               user_regs_struct* regs,
@@ -1119,7 +1123,7 @@ void attach_and_dump_lock_all(const vector<int>& pids,
       ptrace_detach_proc(target_pid);
     exit(1);
   }
-  attach_and_dump_all(pids, pinfos, vals_sps, regs, fails, true);
+  attach_and_dump_all(threads, pinfos, vals_sps, regs, fails, true);
   ptrace_detach_proc(target_pid);
   gettimeofday(&tv_end, 0);
   DBG(1, "Detached main process %d", target_pid);
@@ -1130,20 +1134,20 @@ void attach_and_dump_lock_all(const vector<int>& pids,
       timediff(tv_start, tv_end));
 }
 
-void dump_stack(const vector<int>& pids) {
+void dump_stack(const thread_list& threads) {
   uint trace_length = 1000;
   symbol_table_map* stmap = new symbol_table_map();
-  proc_info* pinfos = new proc_info[pids.size()];
-  vector<ulong>* vals_sps = new vector<ulong>[pids.size()];
-  user_regs_struct* regs = new user_regs_struct[pids.size()];
-  bool* fails = new bool[pids.size()];
+  proc_info* pinfos = new proc_info[threads.size()];
+  vector<ulong>* vals_sps = new vector<ulong>[threads.size()];
+  user_regs_struct* regs = new user_regs_struct[threads.size()];
+  bool* fails = new bool[threads.size()];
 
   DBG(1, "Reading process symbols..");
-  for (size_t i = 0; i < pids.size(); ++i) {
+  for (size_t i = 0; i < threads.size(); ++i) {
     if (!trace_multiple_procs && i >= 1) {
       pinfos[i] = pinfos[0];
     } else {
-      read_proc_maps(pids[i], pinfos[i], stmap);
+      read_proc_maps(threads[i].tid, pinfos[i], stmap);
     }
   }
 
@@ -1157,24 +1161,32 @@ void dump_stack(const vector<int>& pids) {
   DBG(1, "Gathering stack traces..");
   *_attach_started = 1;
 
-  if (lock_all)
-    attach_and_dump_lock_all(pids, pinfos, vals_sps, regs, fails);
-  else
-    attach_and_dump_all(pids, pinfos, vals_sps, regs, fails, false);
+  if (lock_all) {
+    attach_and_dump_lock_all(threads, pinfos, vals_sps, regs, fails);
+  } else {
+    attach_and_dump_all(threads, pinfos, vals_sps, regs, fails, false);
+  }
 
   DBG(1, "Printing stack traces..");
-  print_trace_report(pinfos, pids);
+  print_trace_report(pinfos, threads);
 
   if (stack_out) {
     stack_out_fp = fopen(stack_out, "w");
   }
 
-  for (size_t i = 0; i < pids.size(); ++i) {
+  for (size_t i = 0; i < threads.size(); ++i) {
     if (fails[i] == false) {
       if (single_line) {
-        print_stack("%d  ", pids[i]);
+        const size_t name_width =
+            thread_names ? thread_info::max_name_len() + 2 : 0;
+        const string name_info = thread_names ? threads[i].name : "";
+        print_stack("%d  %-*s", threads[i].tid, name_width, name_info.c_str());
       } else {
-        print_stack("\nThread %ld (LWP %d):\n", pids.size() - i, pids[i]);
+        const string name_info = thread_names ? ", " + threads[i].name : "";
+        print_stack("\nThread %ld (LWP %d)%s:\n",
+                    threads.size() - i,
+                    threads[i].tid,
+                    name_info.c_str());
       }
       parse_stack_trace(pinfos[i], vals_sps[i], trace_length);
     }
@@ -1200,6 +1212,7 @@ struct option long_options[] = {
     {"debug_print_time_level", required_argument, nullptr, 't'},
     {"pid", required_argument, nullptr, 'p'},
     {"single_line", no_argument, nullptr, 's'},
+    {"thread_names", no_argument, nullptr, 'n'},
     {"calls", required_argument, nullptr, 'c'},
     {"frame_check", no_argument, nullptr, 'f'},
     {"stack_out", required_argument, nullptr, 'o'},
@@ -1228,6 +1241,7 @@ static void usage_exit() {
   printf(
       " -s, --single_line              :Printing call stack info into one line "
       "per process, instead of gdb-like output\n");
+  printf(" -n, --thread_names             :Print thread names\n");
   printf(
       " -c, --calls=N                  :Maximum ptrace call counts per "
       "process. Default is 1000\n");
@@ -1265,7 +1279,7 @@ static void usage_exit() {
 static void get_options(int argc, char** argv) {
   int c, opt_ind = 0;
   while ((c = getopt_long(
-              argc, argv, "?absflvw:k:d:c:t:p:o:", long_options, &opt_ind)) !=
+              argc, argv, "?absnflvw:k:d:c:t:p:o:", long_options, &opt_ind)) !=
          EOF) {
     switch (c) {
     case '?':
@@ -1294,6 +1308,9 @@ static void get_options(int argc, char** argv) {
       break;
     case 's':
       single_line = 1;
+      break;
+    case 'n':
+      thread_names = 1;
       break;
     case 'o':
       stack_out = optarg;
@@ -1352,14 +1369,14 @@ int cont_process_if(int pid) {
  * not aborted and target_pid (main pid) is running, we don't check
  * other processes. Otherwise we check all pids (including all LWPs of
  * the target process). */
-int cont_all_process(int main_pid, const vector<int>& pids, bool aborted) {
+int cont_all_process(int main_pid, const thread_list& threads, bool aborted) {
   int status = 0;
   status = cont_process_if(main_pid);
   if (status <= 0 && !aborted)
     return status;
   DBG(1, "Needs cleanup. Sending SIGCONT to all processes if needed..")
-  for (size_t i = 0; i < pids.size(); ++i) {
-    int rc = cont_process_if(pids[i]);
+  for (size_t i = 0; i < threads.size(); ++i) {
+    int rc = cont_process_if(threads[i].tid);
     if (rc)
       status = rc;
   }
@@ -1369,7 +1386,7 @@ int cont_all_process(int main_pid, const vector<int>& pids, bool aborted) {
 }
 
 int main(int argc, char** argv) {
-  vector<int> pids;
+  thread_list threads;
   if (argc <= 1) {
     usage_exit();
   }
@@ -1377,7 +1394,7 @@ int main(int argc, char** argv) {
   struct timeval t_current;
   gettimeofday(&t_begin, 0);
   get_options(argc, argv);
-  get_pids(target_pid, pids);
+  get_tids(target_pid, threads);
   _attach_started = (int*)mmap(
       0, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 
@@ -1388,7 +1405,7 @@ int main(int argc, char** argv) {
   } else if (quickstack_core_pid == 0) {
     /* quickstack core process */
     init_signals();
-    dump_stack(pids);
+    dump_stack(threads);
     exit(0);
   }
 
@@ -1435,7 +1452,7 @@ int main(int argc, char** argv) {
     sleep(5);
   }
   if (*_attach_started) {
-    int stop_status = cont_all_process(target_pid, pids, cleanup_needed);
+    int stop_status = cont_all_process(target_pid, threads, cleanup_needed);
     if (stop_status) {
       DBG(1,
           "FATAL: SIGCONT target process failed."

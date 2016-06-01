@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include <iostream>
+#include <fstream>
 #include <dirent.h>
 #include <vector>
 #include <map>
@@ -184,6 +185,32 @@ typedef struct stopper_symbol {
   ulong addr_begin;
   ulong addr_end;
 } stopper_symbol;
+
+typedef struct thread_info {
+  thread_info(const int tid) : tid(tid) {
+    const string file_path = "/proc/" + std::to_string(tid) + "/comm";
+    std::ifstream comm_file(file_path);
+    if (comm_file.is_open()) {
+      std::getline(comm_file, name);
+      comm_file.close();
+    } else {
+      name = "UNKNOWN";
+    }
+  }
+
+  static inline size_t max_name_len() {
+    return 16U;
+  }
+
+  int tid;
+  string name;
+} thread_info;
+
+inline bool operator<(const thread_info& lhs, const thread_info& rhs) {
+  return lhs.tid < rhs.tid;
+}
+
+typedef struct vector<thread_info> thread_list;
 
 extern int target_pid;
 extern int debug_level;
