@@ -5,6 +5,9 @@
 #include <getopt.h>
 #include <sys/mman.h>
 
+#include <fstream>
+#include <sstream>
+
 #if defined(__i386__)
 #define STACK_IP eip
 #define STACK_SP esp
@@ -29,7 +32,7 @@ int timeout_seconds = 600;
 bool lock_all = false;
 
 const char* debug_dir = "/usr/lib/debug";
-int* _attach_started = 0;
+int* _attach_started = nullptr;
 stopper_symbol stopper[3] = {
     {"main", 0, 0}, {"start_thread", 0, 0}, {"do_sigwait", 0, 0}};
 int num_stopper_symbol = 3;
@@ -226,8 +229,9 @@ static char* find_debug_file(const char* stripped_file) {
     do {
       dent = readdir(dp);
       if (dent) {
-        if (dent->d_name[0] == '.')
+        if (dent->d_name[0] == '.') {
           continue;
+        }
         if (match_debug_file(name, dent->d_name)) {
           real_debug_file = dirname1;
           real_debug_file += "/";
@@ -273,7 +277,7 @@ void bfd_handle::close_all() {
     free(debug_file);
 }
 
-void bfd_handle::init(const char* file = NULL) {
+void bfd_handle::init(const char* file = nullptr) {
   abfd = bfd_openr(file ? file : filename, NULL);
   if (!abfd) {
     fprintf(stderr, "Failed at bfd_openr! %s\n", file ? file : filename);
@@ -345,8 +349,7 @@ void bfd_handle::load_symbols(bool relative, ulong addr_begin) {
   bfd_byte* p = (bfd_byte*)syms;
   bfd_byte* pend = p + symcnt * size;
   for (; p < pend; p += size) {
-    asymbol* sym = 0;
-    sym = bfd_minisymbol_to_symbol(abfd, dynamic, p, store);
+    asymbol* sym = bfd_minisymbol_to_symbol(abfd, dynamic, p, store);
     if ((sym->flags & BSF_FUNCTION) == 0) {
       continue;
     }
@@ -368,7 +371,7 @@ void bfd_handle::load_symbols(bool relative, ulong addr_begin) {
     e.name = string(sinfo.name);
     st->symbols.push_back(e);
   }
-  std::sort(st->symbols.begin(), st->symbols.end(), std::less<ulong>());
+  std::sort(st->symbols.begin(), st->symbols.end(), std::less<symbol_ent>());
   load_stopper_symbols(st, relative, addr_begin);
 }
 
@@ -397,7 +400,7 @@ static bool check_shlib(const std::string& fn) {
     return false;
   }
   elf_version(EV_CURRENT);
-  Elf* elf = elf_begin(fileno(fp), ELF_C_READ, NULL);
+  Elf* elf = elf_begin(fileno(fp), ELF_C_READ, nullptr);
   if (elf == 0) {
     return false;
   }
@@ -441,57 +444,34 @@ static bool has_exec_permission(const char* filename) {
   return false;
 }
 
-static void read_proc_map_ent(char* line,
+static void read_proc_map_ent(const string& line,
                               proc_info& pinfo,
                               symbol_table_map* stmap) {
   bool delete_marked = false;
-  char* t1 = strchr(line, ' ');
-  if (!t1) {
+  std::istringstream line_sin(line);
+  string tok;
+  vector<string> tokens;
+  while (line_sin >> tok) {
+    tokens.push_back(tok);
+  }
+  if (tokens.size() < 6) {
     return;
+  } else if (tokens.size() > 6 && startwith(tokens[6], "(deleted")) {
+    delete_marked = true;
   }
-  char* t2 = strchr(t1 + 1, ' ');
-  if (!t2) {
-    return;
-  }
-  char* t3 = strchr(t2 + 1, ' ');
-  if (!t3) {
-    return;
-  }
-  char* t4 = strchr(t3 + 1, ' ');
-  if (!t4) {
-    return;
-  }
-  char* t5 = strchr(t4 + 1, ' ');
-  if (!t5) {
-    return;
-  }
-  while (t5[1] == ' ') {
-    ++t5;
-  }
-  char* t6 = strchr(t5 + 1, '\n');
-  char* t7 = strchr(t5 + 1, ' ');
-  if (!t6) {
-    return;
-  }
-  *t1 = *t2 = *t3 = *t4 = *t5 = *t6 = '\0';
-  if (t7) {
-    if (startwith(std::string(t7), " (deleted")) {
-      delete_marked = true;
-    }
-    *t7 = '\0';
-  }
-  if (t2 - t1 == 5 && t2[-2] != 'x') {
+  const string& perms = tokens[1];
+  if (perms.size() == 5 && perms[3] != 'x') {
     return;
   }
   ulong a0 = 0, a1 = 0;
-  sscanf(line, "%lx-%lx", &a0, &a1);
+  sscanf(line.c_str(), "%lx-%lx", &a0, &a1);
 
   proc_map_ent e;
 
   e.addr_begin = a0;
   e.addr_size = a1 - a0;
-  e.offset = atol(t2 + 1);
-  e.path = std::string(t5 + 1);
+  e.offset = std::stol(tokens[2], nullptr, 16);
+  e.path = tokens[5];
   if (e.path.empty()) {
     return;
   } else if (e.path == "[vdso]") {
@@ -523,17 +503,16 @@ static void read_proc_map_ent(char* line,
 }
 
 static void read_proc_maps(int pid, proc_info& pinfo, symbol_table_map* stmap) {
-  char fn[PATH_MAX];
-  char buf[4096];
-  snprintf(fn, sizeof(fn), "/proc/%d/maps", pid);
-  auto_fp fp(fopen(fn, "r"));
-  if (fp == 0) {
+  const string maps_file_path = "/proc/" + std::to_string(pid) + "/maps";
+  std::ifstream maps_file(maps_file_path);
+  if (!maps_file.is_open()) {
     return;
   }
-  while (fgets(buf, sizeof(buf), fp) != 0) {
-    read_proc_map_ent(buf, pinfo, stmap);
+  string line;
+  while (std::getline(maps_file, line)) {
+    read_proc_map_ent(line, pinfo, stmap);
   }
-  std::sort(pinfo.maps.begin(), pinfo.maps.end(), std::less<ulong>());
+  std::sort(pinfo.maps.begin(), pinfo.maps.end(), std::less<proc_map_ent>());
 }
 
 static const symbol_ent* find_symbol(const symbol_table* st,
@@ -546,7 +525,7 @@ static const symbol_ent* find_symbol(const symbol_table* st,
   offset_r = 0;
   const symbol_table::symbols_type& ss = st->symbols;
   symbol_table::symbols_type::const_iterator j =
-      std::upper_bound(ss.begin(), ss.end(), addr);
+      std::upper_bound(ss.begin(), ss.end(), symbol_ent(addr));
   if (j != ss.begin()) {
     --j;
   } else {
@@ -555,9 +534,10 @@ static const symbol_ent* find_symbol(const symbol_table* st,
   if (j == ss.end()) {
     return 0;
   }
-  is_text_r = (*j >= st->text_vma && *j < st->text_vma + st->text_size);
+  is_text_r =
+      (j->addr >= st->text_vma && j->addr < st->text_vma + st->text_size);
   pos_r = j - ss.begin();
-  offset_r = addr - *j;
+  offset_r = addr - j->addr;
   return &*j;
 }
 
@@ -573,8 +553,8 @@ static bool match_basic_lib(const string& path) {
 static int pinfo_symbol_exists(const proc_info& pinfo, ulong addr) {
   /* 0: not exists, 1: core library, 2: others */
   int symbol_type = 0;
-  proc_info::maps_type::const_iterator i =
-      std::upper_bound(pinfo.maps.begin(), pinfo.maps.end(), addr);
+  proc_info::maps_type::const_iterator i = std::upper_bound(
+      pinfo.maps.begin(), pinfo.maps.end(), proc_map_ent(addr));
   if (i != pinfo.maps.begin()) {
     --i;
   } else {
@@ -631,7 +611,7 @@ static const symbol_ent* pinfo_find_symbol(const proc_info& pinfo,
     if (ignore_basic_libs) {
       if (match_basic_lib(i->path)) {
         DBG(10, "Matched basic libs2 %s", i->path.c_str());
-        return 0;
+        return nullptr;
       }
     }
     ulong a = addr;
@@ -650,7 +630,7 @@ static const symbol_ent* pinfo_find_symbol(const proc_info& pinfo,
     } else {
     }
   }
-  return 0;
+  return nullptr;
 }
 
 static bool is_stopper_addr(ulong addr) {
@@ -865,9 +845,7 @@ char* get_demangled_symbol(const char* symbol_name) {
   return demangled;
 }
 
-void parse_stack_trace(const int pid,
-                       const proc_info& pinfo,
-                       const user_regs_struct& regs,
+void parse_stack_trace(const proc_info& pinfo,
                        const std::vector<ulong>& vals_sps,
                        size_t maxlen) {
   char buf[128];
@@ -973,16 +951,16 @@ static int ptrace_detach_proc(int pid) {
 
 int get_tgid(int target_pid) {
   int tgid = -1;
-  char fn[PATH_MAX];
-  char buf[4096];
-  snprintf(fn, sizeof(fn), "/proc/%d/status", target_pid);
-  auto_fp fp(fopen(fn, "r"));
-  if (fp == 0) {
+  const string status_file_path =
+      "/proc/" + std::to_string(target_pid) + "/status";
+  std::ifstream status_file(status_file_path);
+  if (!status_file.is_open()) {
     return tgid;
   }
-  while (fgets(buf, sizeof(buf), fp) != 0) {
-    if (startwith(buf, "Tgid")) {
-      sscanf(buf, "Tgid:%d", &tgid);
+  string line;
+  while (std::getline(status_file, line)) {
+    if (startwith(line, "Tgid")) {
+      sscanf(line.c_str(), "Tgid:%d", &tgid);
     }
   }
   return tgid;
@@ -1003,8 +981,9 @@ void get_pids(int target_pid, std::vector<int>& pids_r) {
     do {
       dent = readdir(dp);
       if (dent) {
-        if (dent->d_name[0] == '.')
+        if (dent->d_name[0] == '.') {
           continue;
+        }
         int pid = atoi(dent->d_name);
         if (pid == target_pid) {
           target_pid_exists = true;
@@ -1197,7 +1176,7 @@ void dump_stack(const vector<int>& pids) {
       } else {
         print_stack("\nThread %ld (LWP %d):\n", pids.size() - i, pids[i]);
       }
-      parse_stack_trace(pids[i], pinfos[i], regs[i], vals_sps[i], trace_length);
+      parse_stack_trace(pinfos[i], vals_sps[i], trace_length);
     }
   }
   if (stack_out_fp) {
@@ -1212,23 +1191,23 @@ void dump_stack(const vector<int>& pids) {
 }
 
 struct option long_options[] = {
-    {"?", no_argument, 0, '?'},
-    {"help", no_argument, 0, 'h'},
-    {"version", no_argument, 0, 'v'},
-    {"arg_print", no_argument, 0, 'a'},
-    {"basename_only", no_argument, 0, 'b'},
-    {"debug", required_argument, 0, 'd'},
-    {"debug_print_time_level", required_argument, 0, 't'},
-    {"pid", required_argument, 0, 'p'},
-    {"single_line", no_argument, 0, 's'},
-    {"calls", required_argument, 0, 'c'},
-    {"frame_check", no_argument, 0, 'f'},
-    {"stack_out", required_argument, 0, 'o'},
-    {"multiple_targets", required_argument, 0, 'm'},
-    {"flush_log", required_argument, 0, 'w'},
-    {"timeout_seconds", required_argument, 0, 'k'},
-    {"lock_all", no_argument, 0, 'l'},
-    {0, 0, 0, 0}};
+    {"?", no_argument, nullptr, '?'},
+    {"help", no_argument, nullptr, 'h'},
+    {"version", no_argument, nullptr, 'v'},
+    {"arg_print", no_argument, nullptr, 'a'},
+    {"basename_only", no_argument, nullptr, 'b'},
+    {"debug", required_argument, nullptr, 'd'},
+    {"debug_print_time_level", required_argument, nullptr, 't'},
+    {"pid", required_argument, nullptr, 'p'},
+    {"single_line", no_argument, nullptr, 's'},
+    {"calls", required_argument, nullptr, 'c'},
+    {"frame_check", no_argument, nullptr, 'f'},
+    {"stack_out", required_argument, nullptr, 'o'},
+    {"multiple_targets", required_argument, nullptr, 'm'},
+    {"flush_log", required_argument, nullptr, 'w'},
+    {"timeout_seconds", required_argument, nullptr, 'k'},
+    {"lock_all", no_argument, nullptr, 'l'},
+    {nullptr, 0, nullptr, 0}};
 
 static void show_version() { printf("quickstack version %s\n", version); }
 

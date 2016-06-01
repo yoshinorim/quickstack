@@ -51,9 +51,13 @@ struct bfd_handle;
 struct symbol_ent {
   ulong addr;
   string name;
-  operator ulong() const { return addr; }
-  symbol_ent() : addr(0) {}
+  symbol_ent(const ulong addr = 0, const string& name = "")
+      : addr(addr), name(name) {}
 };
+
+inline bool operator<(const symbol_ent& lhs, const symbol_ent& rhs) {
+  return lhs.addr < rhs.addr;
+}
 
 struct symbol_table {
   typedef vector<symbol_ent> symbols_type;
@@ -153,15 +157,19 @@ struct proc_map_ent {
   symbol_table* stbl;
   bool relative : 1;
   bool is_vdso : 1;
-  operator ulong() const { return addr_begin; } /* for comparison */
-  proc_map_ent()
-      : addr_begin(0),
+
+  proc_map_ent(const ulong addr_begin = 0)
+      : addr_begin(addr_begin),
         addr_size(0),
         offset(0),
-        stbl(0),
+        stbl(nullptr),
         relative(false),
         is_vdso(false) {}
 };
+
+inline bool operator<(const proc_map_ent& lhs, const proc_map_ent& rhs) {
+  return lhs.addr_begin < rhs.addr_begin;
+}
 
 struct proc_info {
   typedef vector<proc_map_ent> maps_type;
