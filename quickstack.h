@@ -100,13 +100,13 @@ struct bfd_handle {
   void load_symbols(bool relative, ulong addr_begin);
   void load_debug_section_if();
   bfd* get();
-  bool has_debug();
+  bool has_debug() const;
   void free_syms_if();
   void free_st_if();
   int get_file_line(ulong addr,
                     const char** file,
                     const char** function,
-                    uint* lineno);
+                    uint* lineno) const;
 
   symbol_table* st;
   const char* filename;
