@@ -1,6 +1,9 @@
 #ifndef quickstack_h
 #define quickstack_h
 
+#define PACKAGE 1
+#define PACKAGE_VERSION 1
+
 #include <bfd.h>
 #include <stdio.h>
 #include <stdlib.h>
