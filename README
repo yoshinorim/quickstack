@@ -23,5 +23,6 @@ sudo apt-get install libiberty-dev
 
 
 Example:
-[user$] quickstack -p `pidof mysqld`
+[user$] quickstack -f -p `pidof mysqld`
 
+License: BSD 3-Clause License
