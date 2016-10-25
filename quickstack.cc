@@ -259,12 +259,12 @@ void bfd_handle::free_st_if() {
   }
 }
 
-bool bfd_handle::has_debug() { return has_debug_symbols; }
+bool bfd_handle::has_debug() const { return has_debug_symbols; }
 
 int bfd_handle::get_file_line(ulong addr,
                               const char** file,
                               const char** function,
-                              uint* lineno) {
+                              uint* lineno) const {
   return bfd_find_nearest_line(
       abfd, dbgsec, syms, addr - 1, file, function, lineno);
 }
@@ -580,15 +580,16 @@ static int pinfo_symbol_exists(const proc_info& pinfo, ulong addr) {
   return symbol_type;
 }
 
-static const symbol_ent* pinfo_find_symbol(const proc_info& pinfo,
-                                           ulong addr,
-                                           ulong& offset_r,
-                                           bfd_handle** bh_ptr,
-                                           ulong& relative_addr,
-                                           bool ignore_basic_libs = false) {
+static const symbol_ent* pinfo_find_symbol(
+    const proc_info& pinfo,
+    const ulong addr,
+    ulong& offset_r,
+    ulong& maps_offset,
+    ulong& relative_addr,
+    const bool ignore_basic_libs = false) {
   offset_r = 0;
-  proc_info::maps_type::const_iterator i =
-      std::upper_bound(pinfo.maps.begin(), pinfo.maps.end(), addr);
+  proc_info::maps_type::const_iterator i = std::upper_bound(
+      pinfo.maps.begin(), pinfo.maps.end(), proc_map_ent(addr));
   if (i != pinfo.maps.begin()) {
     --i;
   } else {
@@ -623,11 +624,10 @@ static const symbol_ent* pinfo_find_symbol(const proc_info& pinfo,
     ulong offset = 0;
     bool is_text = false;
     const symbol_ent* const e = find_symbol(i->stbl, a, is_text, pos, offset);
-    *bh_ptr = i->stbl->bh;
     if (e != 0 && is_text) {
       offset_r = offset;
+      maps_offset = i - pinfo.maps.begin();
       return e;
-    } else {
     }
   }
   return nullptr;
@@ -859,15 +859,15 @@ void parse_stack_trace(const proc_info& pinfo,
     ulong addr = vals_sps[i];
     ulong rel_addr = 0;
     ulong offset = 0;
+    ulong maps_offset = 0;
     char* demangled;
-    bfd_handle* bh;
     DBG(11, "addr: %016lx %ld %ld", addr, vals_sps.size(), maxlen);
     bool ignore_basic_libs = true;
     if (i == 0 || i == std::min(vals_sps.size(), maxlen) - 1) {
       ignore_basic_libs = false;
     }
     const symbol_ent* e = pinfo_find_symbol(
-        pinfo, addr, offset, &bh, rel_addr, ignore_basic_libs);
+        pinfo, addr, offset, maps_offset, rel_addr, ignore_basic_libs);
     if (e != 0) {
       if (offset != 0) {
         if (!single_line) {
@@ -882,6 +882,8 @@ void parse_stack_trace(const proc_info& pinfo,
           if (!print_arg) {
             out << " ()";
           }
+          const proc_map_ent& proc_maps_ent = pinfo.maps[maps_offset];
+          const bfd_handle* bh = proc_maps_ent.stbl->bh;
           if (bh->has_debug()) {
             int ret;
             ret = bh->get_file_line(
@@ -897,13 +899,8 @@ void parse_stack_trace(const proc_info& pinfo,
               out << "";
             }
           } else {
-            if (basename_only) {
-              file = basename(bh->filename);
-            } else {
-              file = bh->filename;
-            }
-            out << " from ";
-            out << file;
+            out << " from " << (basename_only ? basename(proc_maps_ent.path)
+                                              : proc_maps_ent.path);
           }
           print_stack("%s\n", out.str().c_str());
         } else {
