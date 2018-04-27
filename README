@@ -18,7 +18,7 @@ How to build:
 
 Install dependencies (Ubuntu):
 sudo apt-get install binutils-dev
-sudo apt-get install elfutils-dev
+sudo apt-get install libelf-dev
 sudo apt-get install libiberty-dev
 
 
