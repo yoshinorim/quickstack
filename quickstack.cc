@@ -1355,7 +1355,7 @@ int cont_process_if(int pid) {
     sleep(2);
   }
   if (is_stopped) {
-    DBG(1, "Failed to stop pid %d", pid);
+    DBG(1, "Failed to start pid %d", pid);
     return 1;
   }
   return 0;
