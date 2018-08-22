@@ -4,6 +4,7 @@
 #include <asm/unistd.h>
 #include <getopt.h>
 #include <sys/mman.h>
+#include <sys/uio.h>
 
 #include <sstream>
 
@@ -13,6 +14,9 @@
 #elif defined(__x86_64__)
 #define STACK_IP rip
 #define STACK_SP rsp
+#elif defined(__aarch64__)
+#define STACK_IP pc
+#define STACK_SP sp
 #else
 #error "unsupported cpu arch"
 #endif
@@ -199,9 +203,12 @@ static bool match_debug_file(const string& name, const char* file) {
 }
 
 static int get_user_regs(int pid, user_regs_struct& regs) {
+  struct iovec iov;
+  iov.iov_base = (void*) &regs;
+  iov.iov_len = sizeof(regs);
   int count = 100;
   while (1) {
-    int e = ptrace(PTRACE_GETREGS, pid, 0, &regs);
+    int e = ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iov);
     if (e != 0) {
       if (errno == ESRCH && count-- > 0) {
         sched_yield();
@@ -1393,7 +1400,7 @@ int main(int argc, char** argv) {
   get_options(argc, argv);
   get_tids(target_pid, threads);
   _attach_started = (int*)mmap(
-      0, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+      0, getpagesize(), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 
   pid_t quickstack_core_pid = fork();
   if (quickstack_core_pid < 0) {
