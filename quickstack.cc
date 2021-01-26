@@ -13,6 +13,9 @@
 #elif defined(__x86_64__)
 #define STACK_IP rip
 #define STACK_SP rsp
+#elif defined(__aarch64__)
+#define STACK_IP pc
+#define STACK_SP sp
 #else
 #error "unsupported cpu arch"
 #endif
@@ -198,16 +201,16 @@ static bool match_debug_file(const string& name, const char* file) {
   return true;
 }
 
-static int get_user_regs(int pid, user_regs_struct& regs) {
+static int get_user_regs(int pid, struct iovec& iovec) {
   int count = 100;
   while (1) {
-    int e = ptrace(PTRACE_GETREGS, pid, 0, &regs);
+    int e = ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iovec);
     if (e != 0) {
       if (errno == ESRCH && count-- > 0) {
         sched_yield();
         continue;
       }
-      perror("ptrace(PTRACE_GETREGS)");
+      perror("ptrace(PTRACE_GETREGSET)");
       return -1;
     }
     break;
@@ -1037,20 +1040,20 @@ void print_trace_report(proc_info* pinfos, const thread_list& threads) {
 void attach_and_dump_all(const thread_list& threads,
                          proc_info* pinfos,
                          vector<ulong>* vals_sps,
-                         user_regs_struct* regs,
+                         struct iovec* iovecs,
                          bool* fails,
                          bool lock_main) {
   for (size_t i = 0; i < threads.size(); ++i) {
 
     if (lock_main && threads[i].tid == target_pid) {
-      if (get_user_regs(threads[i].tid, regs[i]) != 0) {
+      if (get_user_regs(threads[i].tid, iovecs[i]) != 0) {
         fails[i] = true;
       } else {
         if (max_ptrace_calls &&
             get_stack_trace(threads[i].tid,
                             pinfos[i],
                             max_ptrace_calls,
-                            regs[i],
+                            *static_cast<user_regs_struct*>(iovecs[i].iov_base),
                             vals_sps[i]) != 0) {
           fails[i] = true;
         }
@@ -1074,14 +1077,14 @@ void attach_and_dump_all(const thread_list& threads,
     if (rc != 0) {
       fails[i] = true;
     } else {
-      if (get_user_regs(threads[i].tid, regs[i]) != 0) {
+      if (get_user_regs(threads[i].tid, iovecs[i]) != 0) {
         fails[i] = true;
       } else {
         if (max_ptrace_calls &&
             get_stack_trace(threads[i].tid,
                             pinfos[i],
                             max_ptrace_calls,
-                            regs[i],
+                            *static_cast<user_regs_struct*>(iovecs[i].iov_base),
                             vals_sps[i]) != 0) {
           fails[i] = true;
         }
@@ -1108,7 +1111,7 @@ void attach_and_dump_all(const thread_list& threads,
 void attach_and_dump_lock_all(const thread_list& threads,
                               proc_info* pinfos,
                               vector<ulong>* vals_sps,
-                              user_regs_struct* regs,
+                              struct iovec* iovecs,
                               bool* fails) {
   struct timeval tv_start, tv_end;
   DBG(1, "Attaching main process %d, locking all.", target_pid);
@@ -1120,7 +1123,7 @@ void attach_and_dump_lock_all(const thread_list& threads,
       ptrace_detach_proc(target_pid);
     exit(1);
   }
-  attach_and_dump_all(threads, pinfos, vals_sps, regs, fails, true);
+  attach_and_dump_all(threads, pinfos, vals_sps, iovecs, fails, true);
   ptrace_detach_proc(target_pid);
   gettimeofday(&tv_end, 0);
   DBG(1, "Detached main process %d", target_pid);
@@ -1136,7 +1139,12 @@ void dump_stack(const thread_list& threads) {
   symbol_table_map* stmap = new symbol_table_map();
   proc_info* pinfos = new proc_info[threads.size()];
   vector<ulong>* vals_sps = new vector<ulong>[threads.size()];
-  user_regs_struct* regs = new user_regs_struct[threads.size()];
+  struct iovec* iovecs = new iovec[threads.size()];
+  for (size_t i = 0; i < threads.size(); i++) {
+    iovecs[i].iov_base = new user_regs_struct{};
+    memset(iovecs[i].iov_base, 0, sizeof(user_regs_struct));
+    iovecs[i].iov_len = sizeof(user_regs_struct);
+  }
   bool* fails = new bool[threads.size()];
 
   DBG(1, "Reading process symbols..");
@@ -1159,9 +1167,9 @@ void dump_stack(const thread_list& threads) {
   *_attach_started = 1;
 
   if (lock_all) {
-    attach_and_dump_lock_all(threads, pinfos, vals_sps, regs, fails);
+    attach_and_dump_lock_all(threads, pinfos, vals_sps, iovecs, fails);
   } else {
-    attach_and_dump_all(threads, pinfos, vals_sps, regs, fails, false);
+    attach_and_dump_all(threads, pinfos, vals_sps, iovecs, fails, false);
   }
 
   DBG(1, "Printing stack traces..");
@@ -1195,7 +1203,10 @@ void dump_stack(const thread_list& threads) {
   delete[] fails;
   delete[] pinfos;
   delete[] vals_sps;
-  delete[] regs;
+  for (size_t i = 0; i < threads.size(); i++) {
+    delete static_cast<user_regs_struct*>(iovecs[i].iov_base);
+  }
+  delete[] iovecs;
   delete stmap;
 }
 
@@ -1393,7 +1404,7 @@ int main(int argc, char** argv) {
   get_options(argc, argv);
   get_tids(target_pid, threads);
   _attach_started = (int*)mmap(
-      0, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+      0, PTRACE_SEIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 
   pid_t quickstack_core_pid = fork();
   if (quickstack_core_pid < 0) {
