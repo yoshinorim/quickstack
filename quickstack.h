@@ -5,6 +5,7 @@
 #define PACKAGE_VERSION 1
 
 #include <bfd.h>
+#include <bits/types/struct_iovec.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,7 +17,9 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#if defined(__x86_64__) || defined(__i386__)
 #include <sys/reg.h>
+#endif
 #include <sys/time.h>
 #include <unistd.h>
 #include <limits.h>
