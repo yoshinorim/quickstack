@@ -55,6 +55,7 @@ volatile sig_atomic_t shutdown_program = 0;
 int print_arg = 0;
 int single_line = 0;
 int thread_names = 0;
+int line_numbers = 0;
 int trace_multiple_procs = 0;
 int basename_only = 0;
 int max_ptrace_calls = 1000;
@@ -887,7 +888,7 @@ void parse_stack_trace(const proc_info& pinfo,
           }
           const proc_map_ent& proc_maps_ent = pinfo.maps[maps_offset];
           const bfd_handle* bh = proc_maps_ent.stbl->bh;
-          if (bh->has_debug()) {
+          if (bh->has_debug() && line_numbers) {
             int ret;
             ret = bh->get_file_line(
                 rel_addr ? rel_addr : addr, &file, &name, &lineno);
@@ -1221,6 +1222,7 @@ struct option long_options[] = {
     {"pid", required_argument, nullptr, 'p'},
     {"single_line", no_argument, nullptr, 's'},
     {"thread_names", no_argument, nullptr, 'n'},
+    {"line_numbers", no_argument, nullptr, 'N'},
     {"calls", required_argument, nullptr, 'c'},
     {"frame_check", no_argument, nullptr, 'f'},
     {"stack_out", required_argument, nullptr, 'o'},
@@ -1250,6 +1252,8 @@ static void usage_exit() {
       " -s, --single_line              :Printing call stack info into one line "
       "per process, instead of gdb-like output\n");
   printf(" -n, --thread_names             :Print thread names\n");
+  printf(" -N, --line_numbers             :Print (if available) function line "
+         "numbers\n");
   printf(
       " -c, --calls=N                  :Maximum ptrace call counts per "
       "process. Default is 1000\n");
@@ -1287,7 +1291,7 @@ static void usage_exit() {
 static void get_options(int argc, char** argv) {
   int c, opt_ind = 0;
   while ((c = getopt_long(
-              argc, argv, "?absnflvw:k:d:c:t:p:o:", long_options, &opt_ind)) !=
+              argc, argv, "?absnNflvw:k:d:c:t:p:o:", long_options, &opt_ind)) !=
          EOF) {
     switch (c) {
     case '?':
@@ -1319,6 +1323,9 @@ static void get_options(int argc, char** argv) {
       break;
     case 'n':
       thread_names = 1;
+      break;
+    case 'N':
+      line_numbers = 1;
       break;
     case 'o':
       stack_out = optarg;
