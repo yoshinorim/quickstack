@@ -2,24 +2,21 @@ project(quickstack)
 cmake_minimum_required(VERSION 3.1)
 include(CPack)
 
+find_package(PkgConfig)
+
 set(CMAKE_CXX_STANDARD 11)
 set(SOURCE quickstack.cc)
-set(BINUTILS_LIB_DIR /usr/binutils/lib /usr/binutils/lib64)
 
-find_library(BINUTILS_LIB NAMES bfd
-  PATHS ${BINUTILS_LIB_DIR})
-find_library(BINUTILS_ELF_LIB NAMES elf
-  PATHS ${BINUTILS_LIB_DIR})
-find_library(BINUTILS_IBERTY_LIB NAMES iberty
-  PATHS ${BINUTILS_LIB_DIR})
+pkg_check_modules(ELF REQUIRED libelf)
 
-find_path(BINUTILS_INCLUDE_DIR  bfd.h
-  /usr/binutils/include)
-include_directories(${BINUTILS_INCLUDE_DIR})
+find_library(BFD_LIBRARY bfd REQUIRED)
+find_path(BFD_INCLUDE_DIR bfd.h REQUIRED)
 
+find_package(ZLIB REQUIRED)
+
+include_directories(${BFD_INCLUDE_DIR} ${ZLIB_INCLUDE_DIRS})
 add_executable(quickstack ${SOURCE})
-target_link_libraries(quickstack
-  z ${BINUTILS_LIB} ${BINUTILS_ELF_LIB} ${BINUTILS_IBERTY_LIB})
+target_link_libraries(quickstack ZLIB::ZLIB ${ELF_LIBRARIES} ${BFD_LIBRARY})
 
 install(TARGETS quickstack DESTINATION bin)
 
